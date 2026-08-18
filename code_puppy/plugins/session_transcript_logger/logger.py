@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from code_puppy.config import STATE_DIR
+from code_puppy.tools.common import get_working_directory
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +20,14 @@ _MAX_TEXT_PREVIEW = 4000
 
 _sequence_lock = threading.Lock()
 _session_sequences: dict[str, int] = {}
+_session_project_names: dict[str, str] = {}
 
 
 def reset_state() -> None:
     """Reset in-memory state used to sequence log records."""
     with _sequence_lock:
         _session_sequences.clear()
+        _session_project_names.clear()
 
 
 def get_transcript_logs_dir() -> Path:
@@ -55,14 +59,24 @@ def log_user_prompt(prompt: str, session_id: Optional[str]) -> None:
 def log_run_start(agent_name: str, model_name: str, session_id: Optional[str]) -> None:
     if not session_id:
         return
+    with _sequence_lock:
+        _session_project_names[session_id] = os.path.basename(get_working_directory())
     _append_event(
         session_id,
         "run_start",
         {
             "agent_name": agent_name,
             "model_name": model_name,
+            "project_name": _get_project_name(session_id),
         },
     )
+
+
+def _get_project_name(session_id: Optional[str]) -> Optional[str]:
+    if not session_id:
+        return None
+    with _sequence_lock:
+        return _session_project_names.get(session_id)
 
 
 def log_stream_event(
@@ -86,6 +100,7 @@ def log_tool_start(
         {
             "tool_name": tool_name,
             "tool_args": _sanitize_value(tool_args),
+            "project_name": _get_project_name(session_id),
         },
     )
 
@@ -108,6 +123,7 @@ def log_tool_end(
             "duration_ms": round(float(duration_ms), 3),
             "success": _is_successful_result(result),
             "result_summary": _summarize_result(result),
+            "project_name": _get_project_name(session_id),
         },
     )
 
@@ -133,6 +149,7 @@ def log_run_end(
             "error": str(error) if error else None,
             "response_text": response_text,
             "metadata": _sanitize_value(metadata or {}),
+            "project_name": _get_project_name(session_id),
         },
     )
 
