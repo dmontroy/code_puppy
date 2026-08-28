@@ -7,7 +7,7 @@ import os
 import pathlib
 from typing import Any, Optional
 
-from code_puppy.config_file import load_config, mutate_config
+from code_puppy.config_file import load_config, load_config_cached, mutate_config
 from code_puppy.session_storage import compute_scope_key, save_session
 
 logger = logging.getLogger(__name__)
@@ -306,8 +306,18 @@ _warned_no_model = False
 
 
 def _load_config() -> configparser.ConfigParser:
-    """Load ``CONFIG_FILE`` through the bounded, recoverable I/O layer."""
-    return load_config(CONFIG_FILE)
+    """Load ``CONFIG_FILE`` through the bounded, recoverable I/O layer.
+
+    Returns the **shared** parse cached by ``config_file`` (invalidated by
+    file identity and by every in-process write), because the read accessors
+    below are called thousands of times per turn -- see the cache note in
+    :mod:`code_puppy.config_file`.
+
+    The result is READ-ONLY. A caller that needs to mutate a parser must use
+    ``config_file.load_config(CONFIG_FILE)`` for a private instance, or
+    ``mutate_config`` to actually persist a change.
+    """
+    return load_config_cached(CONFIG_FILE)
 
 
 def ensure_config_exists():
@@ -323,7 +333,12 @@ def ensure_config_exists():
     # Skip the read entirely when we already know there's nothing to read --
     # matches configparser's own no-op-on-missing-file behavior and avoids an
     # unnecessary open() attempt during first-run setup.
-    config = _load_config() if exists else configparser.ConfigParser()
+    #
+    # Deliberately the UNCACHED read: this function mutates the parser it gets
+    # (seeding [puppy] and prompted defaults below), which would poison the
+    # shared cached instance for every reader. It also runs once at startup,
+    # so it has nothing to gain from the cache.
+    config = load_config(CONFIG_FILE) if exists else configparser.ConfigParser()
     missing = []
     if DEFAULT_SECTION not in config:
         config[DEFAULT_SECTION] = {}
